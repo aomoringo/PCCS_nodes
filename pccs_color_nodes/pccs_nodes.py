@@ -1,5 +1,8 @@
 import re
+import colorsys
 from typing import Dict, Callable, Match, Optional, List, Tuple
+import numpy as np
+import torch
 
 # =========================================================
 # PCCS 24 HUES
@@ -190,6 +193,27 @@ def same_hue_transform(force_tone: Optional[str] = None, preserve_tone: bool = F
         tone = force_tone if force_tone is not None else (color.get("tone") if preserve_tone else None)
         return build_color_token(same, tone=tone)
     return _transform
+
+# =========================================================
+# PREVIEW HELPERS
+# =========================================================
+
+def color_to_hsv(color: Dict) -> Tuple[float, float, float]:
+    hue = float(color["h"])
+    tone = color.get("tone")
+    tone_hsv = TONE_TO_HSV.get(tone, TONE_TO_HSV[None])
+    return hue, float(tone_hsv["s"]), float(tone_hsv["v"])
+
+def hsv_to_rgb01(h: float, s: float, v: float) -> Tuple[float, float, float]:
+    r, g, b = colorsys.hsv_to_rgb(h / 360.0, s, v)
+    return float(r), float(g), float(b)
+
+def make_swatch_image(width: int, height: int, rgb: Tuple[float, float, float]) -> torch.Tensor:
+    swatch = np.zeros((1, height, width, 3), dtype=np.float32)
+    swatch[:, :, :, 0] = rgb[0]
+    swatch[:, :, :, 1] = rgb[1]
+    swatch[:, :, :, 2] = rgb[2]
+    return torch.from_numpy(swatch)
 
 # =========================================================
 # NODE 1: PARSE / NORMALIZE
@@ -460,6 +484,47 @@ class PCCSTokenToPrompt:
         return (replace_color_tokens(text, _transform, replace_all=replace_all),)
 
 # =========================================================
+# NODE 10: COLOR SWATCH PREVIEW
+# =========================================================
+
+class PCCSColorSwatch:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {
+                    "default": "1girl, dress, {1:R(赤)}, ribbon",
+                    "multiline": True
+                }),
+                "width": ("INT", {"default": 256, "min": 8, "max": 2048, "step": 8}),
+                "height": ("INT", {"default": 256, "min": 8, "max": 2048, "step": 8}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "INT", "FLOAT", "FLOAT", "FLOAT")
+    RETURN_NAMES = ("image", "info", "color_id", "hue", "saturation", "value")
+    FUNCTION = "preview"
+    CATEGORY = "PCCS/Preview"
+
+    def preview(self, text: str, width: int, height: int):
+        try:
+            color = find_first_color_token(text)
+            token = build_color_token(color, tone=color.get("tone"))
+            hue, sat, val = color_to_hsv(color)
+            rgb = hsv_to_rgb01(hue, sat, val)
+            image = make_swatch_image(width, height, rgb)
+            tone = color.get("tone") or ""
+            info = (
+                f"PCCS Swatch | token={token} | en={color['en']} | tone={tone} "
+                f"| hsv=({hue:.1f},{sat:.2f},{val:.2f})"
+            )
+            return (image, info, int(color["id"]), float(hue), float(sat), float(val))
+        except Exception as e:
+            err = f"ERROR: {type(e).__name__}: {e}"
+            image = make_swatch_image(width, height, (0.0, 0.0, 0.0))
+            return (image, err, 0, 0.0, 0.0, 0.0)
+
+# =========================================================
 # NODE CLASS MAPPINGS
 # =========================================================
 
@@ -473,6 +538,7 @@ NODE_CLASS_MAPPINGS = {
     "PCCSNaturalHarmonyToken": PCCSNaturalHarmonyToken,
     "PCCSComplexHarmonyToken": PCCSComplexHarmonyToken,
     "PCCSTokenToPrompt": PCCSTokenToPrompt,
+    "PCCSColorSwatch": PCCSColorSwatch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -485,4 +551,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PCCSNaturalHarmonyToken": "PCCS Harmony Token: Natural",
     "PCCSComplexHarmonyToken": "PCCS Harmony Token: Complex",
     "PCCSTokenToPrompt": "PCCS Token To Prompt",
+    "PCCSColorSwatch": "PCCS Color Swatch",
 }
