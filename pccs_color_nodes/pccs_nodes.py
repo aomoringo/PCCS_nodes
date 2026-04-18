@@ -1,0 +1,488 @@
+import re
+from typing import Dict, Callable, Match, Optional, List, Tuple
+
+# =========================================================
+# PCCS 24 HUES
+# Simplified 24-step hue circle for ComfyUI processing
+# 1 step = 15 degrees
+# =========================================================
+
+PCCS_24 = [
+    {"id": 1,  "code": "R",   "jp": "赤",         "en": "red",                "h":   0},
+    {"id": 2,  "code": "rO",  "jp": "赤橙",       "en": "reddish_orange",     "h":  15},
+    {"id": 3,  "code": "O",   "jp": "橙",         "en": "orange",             "h":  30},
+    {"id": 4,  "code": "yO",  "jp": "黄橙",       "en": "yellowish_orange",   "h":  45},
+    {"id": 5,  "code": "Y",   "jp": "黄",         "en": "yellow",             "h":  60},
+    {"id": 6,  "code": "YG",  "jp": "黄緑",       "en": "yellow_green",       "h":  75},
+    {"id": 7,  "code": "yG",  "jp": "黄みの緑",   "en": "yellowish_green",    "h":  90},
+    {"id": 8,  "code": "G",   "jp": "緑",         "en": "green",              "h": 105},
+    {"id": 9,  "code": "BG",  "jp": "青緑",       "en": "blue_green",         "h": 120},
+    {"id": 10, "code": "bG",  "jp": "青みの緑",   "en": "bluish_green",       "h": 135},
+    {"id": 11, "code": "gB",  "jp": "緑みの青",   "en": "greenish_blue",      "h": 150},
+    {"id": 12, "code": "B",   "jp": "青",         "en": "blue",               "h": 165},
+    {"id": 13, "code": "PB",  "jp": "青紫",       "en": "blue_purple",        "h": 180},
+    {"id": 14, "code": "bP",  "jp": "青みの紫",   "en": "bluish_purple",      "h": 195},
+    {"id": 15, "code": "P",   "jp": "紫",         "en": "purple",             "h": 210},
+    {"id": 16, "code": "RP",  "jp": "赤紫",       "en": "red_purple",         "h": 225},
+    {"id": 17, "code": "rP",  "jp": "赤みの紫",   "en": "reddish_purple",     "h": 240},
+    {"id": 18, "code": "pR",  "jp": "紫みの赤",   "en": "purplish_red",       "h": 255},
+    {"id": 19, "code": "R2",  "jp": "赤(2)",      "en": "red_2",              "h": 270},
+    {"id": 20, "code": "rO2", "jp": "赤橙(2)",    "en": "reddish_orange_2",   "h": 285},
+    {"id": 21, "code": "O2",  "jp": "橙(2)",      "en": "orange_2",           "h": 300},
+    {"id": 22, "code": "yO2", "jp": "黄橙(2)",    "en": "yellowish_orange_2", "h": 315},
+    {"id": 23, "code": "Y2",  "jp": "黄(2)",      "en": "yellow_2",           "h": 330},
+    {"id": 24, "code": "YG2", "jp": "黄緑(2)",    "en": "yellow_green_2",     "h": 345},
+]
+
+PCCS_BY_ID = {c["id"]: c for c in PCCS_24}
+
+# =========================================================
+# TOKEN FORMAT
+#
+# Base token:
+#   {1:R(赤)}
+#
+# Toned token:
+#   {p:1:R(赤)}
+#   {dk:1:R(赤)}
+#   {sf:1:R(赤)}
+#   {g:1:R(赤)}
+#   {ltg:1:R(赤)}
+#   {d:1:R(赤)}
+# =========================================================
+
+COLOR_TOKEN_PATTERN = re.compile(
+    r'\{(?:(?P<tone>[a-zA-Z]+):)?(?P<id>\d+):(?P<code>[A-Za-z0-9]+)\((?P<jp>.*?)\)\}'
+)
+
+# =========================================================
+# TONE DEFINITIONS
+# These are practical approximations, not strict full PCCS recreation.
+# hsv: h(0-360), s(0-1), v(0-1)
+# =========================================================
+
+TONE_TO_PROMPT_PREFIX = {
+    None: "",
+    "": "",
+    "p": "pale",
+    "dk": "dark",
+    "sf": "soft",
+    "g": "grayish",
+    "ltg": "light_grayish",
+    "d": "dull",
+}
+
+# Preview-oriented HSV presets
+TONE_TO_HSV = {
+    None: {"s": 0.85, "v": 0.90},
+    "":   {"s": 0.85, "v": 0.90},
+    "p":  {"s": 0.35, "v": 0.98},
+    "dk": {"s": 0.60, "v": 0.40},
+    "sf": {"s": 0.45, "v": 0.85},
+    "g":  {"s": 0.25, "v": 0.70},
+    "ltg":{"s": 0.18, "v": 0.88},
+    "d":  {"s": 0.38, "v": 0.55},
+}
+
+# =========================================================
+# BASIC HELPERS
+# =========================================================
+
+def rotate_hue_id(hue_id: int, step: int) -> int:
+    return ((hue_id - 1 + step) % 24) + 1
+
+def get_color_by_id(color_id: int) -> Dict:
+    if color_id not in PCCS_BY_ID:
+        raise ValueError(f"Invalid PCCS color id: {color_id}")
+    return dict(PCCS_BY_ID[color_id])
+
+def parse_match_to_color(match: Match[str]) -> Dict:
+    color_id = int(match.group("id"))
+    if color_id not in PCCS_BY_ID:
+        raise ValueError(f"Invalid PCCS color id: {color_id}")
+
+    color = get_color_by_id(color_id)
+    color["tone"] = match.group("tone")
+    color["matched_text"] = match.group(0)
+    color["matched_code"] = match.group("code")
+    color["matched_jp"] = match.group("jp")
+    color["start"] = match.start()
+    color["end"] = match.end()
+    return color
+
+def build_color_token(color: Dict, tone: Optional[str] = None) -> str:
+    if tone:
+        return f'{{{tone}:{color["id"]}:{color["code"]}({color["jp"]})}}'
+    return f'{{{color["id"]}:{color["code"]}({color["jp"]})}}'
+
+def normalize_color_tokens_in_text(text: str, replace_all: bool = False) -> str:
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+
+    def _repl(match: Match[str]) -> str:
+        color = parse_match_to_color(match)
+        return build_color_token(color, tone=color.get("tone"))
+
+    if replace_all:
+        return COLOR_TOKEN_PATTERN.sub(_repl, text)
+    return COLOR_TOKEN_PATTERN.sub(_repl, text, count=1)
+
+def find_first_color_token(text: str) -> Dict:
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    m = COLOR_TOKEN_PATTERN.search(text)
+    if not m:
+        raise ValueError("No PCCS color token found. Expected like {1:R(赤)} or {p:1:R(赤)}")
+    return parse_match_to_color(m)
+
+def find_all_color_tokens(text: str) -> List[Dict]:
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    return [parse_match_to_color(m) for m in COLOR_TOKEN_PATTERN.finditer(text)]
+
+def replace_color_tokens(
+    text: str,
+    transform_func: Callable[[Dict], str],
+    replace_all: bool = False
+) -> str:
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+
+    def _repl(match: Match[str]) -> str:
+        color = parse_match_to_color(match)
+        return transform_func(color)
+
+    if replace_all:
+        return COLOR_TOKEN_PATTERN.sub(_repl, text)
+    return COLOR_TOKEN_PATTERN.sub(_repl, text, count=1)
+
+def safe_run(fallback_count: int = 1):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                err = f"ERROR: {type(e).__name__}: {e}"
+                return tuple([err] * fallback_count)
+        return wrapper
+    return decorator
+
+# =========================================================
+# COMMON TRANSFORMS
+# =========================================================
+
+def tone_transform(target_tone: str) -> Callable[[Dict], str]:
+    def _transform(color: Dict) -> str:
+        base = get_color_by_id(color["id"])
+        return build_color_token(base, tone=target_tone)
+    return _transform
+
+def hue_shift_transform(step: int, preserve_tone: bool = True, force_tone: Optional[str] = None) -> Callable[[Dict], str]:
+    def _transform(color: Dict) -> str:
+        shifted = get_color_by_id(rotate_hue_id(color["id"], step))
+        tone = force_tone if force_tone is not None else (color.get("tone") if preserve_tone else None)
+        return build_color_token(shifted, tone=tone)
+    return _transform
+
+def same_hue_transform(force_tone: Optional[str] = None, preserve_tone: bool = False) -> Callable[[Dict], str]:
+    def _transform(color: Dict) -> str:
+        same = get_color_by_id(color["id"])
+        tone = force_tone if force_tone is not None else (color.get("tone") if preserve_tone else None)
+        return build_color_token(same, tone=tone)
+    return _transform
+
+# =========================================================
+# NODE 1: PARSE / NORMALIZE
+# =========================================================
+
+class PCCSParseColorToken:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {
+                    "default": "1girl, dress, {1:R(赤)}, ribbon",
+                    "multiline": True
+                }),
+                "normalize_all_tokens": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "INT", "STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = (
+        "normalized_text",
+        "found_token",
+        "color_id",
+        "code",
+        "jp_name",
+        "en_name",
+        "tone",
+    )
+    FUNCTION = "parse"
+    CATEGORY = "PCCS/Color"
+
+    @safe_run(fallback_count=7)
+    def parse(self, text: str, normalize_all_tokens: bool):
+        color = find_first_color_token(text)
+        normalized_text = normalize_color_tokens_in_text(text, replace_all=normalize_all_tokens)
+        return (
+            normalized_text,
+            build_color_token(color, tone=color.get("tone")),
+            color["id"],
+            color["code"],
+            color["jp"],
+            color["en"],
+            color.get("tone") or "",
+        )
+
+# =========================================================
+# NODE 2: TONE PALE
+# =========================================================
+
+class PCCSTonePaleToken:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"default": "1girl, dress, {1:R(赤)}, ribbon", "multiline": True}),
+                "replace_all": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("text_out",)
+    FUNCTION = "convert"
+    CATEGORY = "PCCS/Color"
+
+    @safe_run(fallback_count=1)
+    def convert(self, text: str, replace_all: bool):
+        return (replace_color_tokens(text, tone_transform("p"), replace_all=replace_all),)
+
+# =========================================================
+# NODE 3: TONE DARK
+# =========================================================
+
+class PCCSToneDarkToken:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"default": "1girl, dress, {1:R(赤)}, ribbon", "multiline": True}),
+                "replace_all": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("text_out",)
+    FUNCTION = "convert"
+    CATEGORY = "PCCS/Color"
+
+    @safe_run(fallback_count=1)
+    def convert(self, text: str, replace_all: bool):
+        return (replace_color_tokens(text, tone_transform("dk"), replace_all=replace_all),)
+
+# =========================================================
+# NODE 4: ANALOGOUS
+# +30, -30, +60, -60
+# =========================================================
+
+class PCCSAnalogousHarmonyToken:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"default": "1girl, dress, {1:R(赤)}, ribbon", "multiline": True}),
+                "replace_all": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("plus_30", "minus_30", "plus_60", "minus_60")
+    FUNCTION = "convert"
+    CATEGORY = "PCCS/Color"
+
+    @safe_run(fallback_count=4)
+    def convert(self, text: str, replace_all: bool):
+        return (
+            replace_color_tokens(text, hue_shift_transform(2), replace_all=replace_all),
+            replace_color_tokens(text, hue_shift_transform(-2), replace_all=replace_all),
+            replace_color_tokens(text, hue_shift_transform(4), replace_all=replace_all),
+            replace_color_tokens(text, hue_shift_transform(-4), replace_all=replace_all),
+        )
+
+# =========================================================
+# NODE 5: COMPLEMENTARY
+# 180 degrees => +12
+# =========================================================
+
+class PCCSComplementaryHarmonyToken:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"default": "1girl, dress, {1:R(赤)}, ribbon", "multiline": True}),
+                "replace_all": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("complementary_text",)
+    FUNCTION = "convert"
+    CATEGORY = "PCCS/Color"
+
+    @safe_run(fallback_count=1)
+    def convert(self, text: str, replace_all: bool):
+        return (replace_color_tokens(text, hue_shift_transform(12), replace_all=replace_all),)
+
+# =========================================================
+# NODE 6: CONTRAST / TRIAD
+# +120, -120 => +8, -8
+# =========================================================
+
+class PCCSContrastHarmonyToken:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"default": "1girl, dress, {1:R(赤)}, ribbon", "multiline": True}),
+                "replace_all": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("plus_120", "minus_120")
+    FUNCTION = "convert"
+    CATEGORY = "PCCS/Color"
+
+    @safe_run(fallback_count=2)
+    def convert(self, text: str, replace_all: bool):
+        return (
+            replace_color_tokens(text, hue_shift_transform(8), replace_all=replace_all),
+            replace_color_tokens(text, hue_shift_transform(-8), replace_all=replace_all),
+        )
+
+# =========================================================
+# NODE 7: NATURAL HARMONY
+# Practical approximation:
+# - main: same hue, soft
+# - near_plus: +30, grayish
+# - near_minus: -30, light_grayish
+# =========================================================
+
+class PCCSNaturalHarmonyToken:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"default": "1girl, dress, {1:R(赤)}, ribbon", "multiline": True}),
+                "replace_all": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("main_soft", "near_plus_grayish", "near_minus_light_grayish")
+    FUNCTION = "convert"
+    CATEGORY = "PCCS/Color"
+
+    @safe_run(fallback_count=3)
+    def convert(self, text: str, replace_all: bool):
+        return (
+            replace_color_tokens(text, same_hue_transform(force_tone="sf"), replace_all=replace_all),
+            replace_color_tokens(text, hue_shift_transform(2, preserve_tone=False, force_tone="g"), replace_all=replace_all),
+            replace_color_tokens(text, hue_shift_transform(-2, preserve_tone=False, force_tone="ltg"), replace_all=replace_all),
+        )
+
+# =========================================================
+# NODE 8: COMPLEX HARMONY
+# Practical approximation:
+# - main: same hue, grayish
+# - complement: 180, dull
+# - analog_plus: +30, soft
+# - analog_minus: -30, light_grayish
+# =========================================================
+
+class PCCSComplexHarmonyToken:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"default": "1girl, dress, {1:R(赤)}, ribbon", "multiline": True}),
+                "replace_all": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("main_grayish", "complement_dull", "analog_plus_soft", "analog_minus_light_grayish")
+    FUNCTION = "convert"
+    CATEGORY = "PCCS/Color"
+
+    @safe_run(fallback_count=4)
+    def convert(self, text: str, replace_all: bool):
+        return (
+            replace_color_tokens(text, same_hue_transform(force_tone="g"), replace_all=replace_all),
+            replace_color_tokens(text, hue_shift_transform(12, preserve_tone=False, force_tone="d"), replace_all=replace_all),
+            replace_color_tokens(text, hue_shift_transform(2, preserve_tone=False, force_tone="sf"), replace_all=replace_all),
+            replace_color_tokens(text, hue_shift_transform(-2, preserve_tone=False, force_tone="ltg"), replace_all=replace_all),
+        )
+
+# =========================================================
+# NODE 9: TOKEN TO PROMPT
+# {p:1:R(赤)} -> pale_red
+# =========================================================
+
+class PCCSTokenToPrompt:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {
+                    "default": "1girl, dress, {p:1:R(赤)}, ribbon",
+                    "multiline": True
+                }),
+                "replace_all": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt_text",)
+    FUNCTION = "convert"
+    CATEGORY = "PCCS/Color"
+
+    @safe_run(fallback_count=1)
+    def convert(self, text: str, replace_all: bool):
+        def _transform(color: Dict) -> str:
+            tone = color.get("tone")
+            prefix = TONE_TO_PROMPT_PREFIX.get(tone, tone or "")
+            if prefix:
+                return f"{prefix}_{color['en']}"
+            return color["en"]
+
+        return (replace_color_tokens(text, _transform, replace_all=replace_all),)
+
+# =========================================================
+# NODE CLASS MAPPINGS
+# =========================================================
+
+NODE_CLASS_MAPPINGS = {
+    "PCCSParseColorToken": PCCSParseColorToken,
+    "PCCSTonePaleToken": PCCSTonePaleToken,
+    "PCCSToneDarkToken": PCCSToneDarkToken,
+    "PCCSAnalogousHarmonyToken": PCCSAnalogousHarmonyToken,
+    "PCCSComplementaryHarmonyToken": PCCSComplementaryHarmonyToken,
+    "PCCSContrastHarmonyToken": PCCSContrastHarmonyToken,
+    "PCCSNaturalHarmonyToken": PCCSNaturalHarmonyToken,
+    "PCCSComplexHarmonyToken": PCCSComplexHarmonyToken,
+    "PCCSTokenToPrompt": PCCSTokenToPrompt,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "PCCSParseColorToken": "PCCS Parse Color Token",
+    "PCCSTonePaleToken": "PCCS Tone Token: Pale",
+    "PCCSToneDarkToken": "PCCS Tone Token: Dark",
+    "PCCSAnalogousHarmonyToken": "PCCS Harmony Token: Analogous",
+    "PCCSComplementaryHarmonyToken": "PCCS Harmony Token: Complementary",
+    "PCCSContrastHarmonyToken": "PCCS Harmony Token: Contrast (±120°)",
+    "PCCSNaturalHarmonyToken": "PCCS Harmony Token: Natural",
+    "PCCSComplexHarmonyToken": "PCCS Harmony Token: Complex",
+    "PCCSTokenToPrompt": "PCCS Token To Prompt",
+}
