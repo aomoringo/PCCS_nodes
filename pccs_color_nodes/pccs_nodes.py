@@ -87,6 +87,34 @@ TONE_TO_HSV = {
     "d":  {"s": 0.38, "v": 0.55},
 }
 
+# PCCS vivid tone (v1-v24) practical hex references
+PCCS_VIVID_HEX = {
+    1:  "#D40045",
+    2:  "#EE0026",
+    3:  "#FD1A1C",
+    4:  "#FE4118",
+    5:  "#FF590B",
+    6:  "#FF7F00",
+    7:  "#FFCC00",
+    8:  "#FFE600",
+    9:  "#CCE700",
+    10: "#99CF15",
+    11: "#66B82B",
+    12: "#33A23D",
+    13: "#008F62",
+    14: "#008678",
+    15: "#007A87",
+    16: "#055D87",
+    17: "#093F86",
+    18: "#0F218B",
+    19: "#1D1A88",
+    20: "#281285",
+    21: "#340C81",
+    22: "#56007D",
+    23: "#770071",
+    24: "#AF0065",
+}
+
 # =========================================================
 # BASIC HELPERS
 # =========================================================
@@ -207,6 +235,30 @@ def color_to_hsv(color: Dict) -> Tuple[float, float, float]:
 def hsv_to_rgb01(h: float, s: float, v: float) -> Tuple[float, float, float]:
     r, g, b = colorsys.hsv_to_rgb(h / 360.0, s, v)
     return float(r), float(g), float(b)
+
+def hex_to_rgb01(hex_color: str) -> Tuple[float, float, float]:
+    hex_value = hex_color.strip().lstrip("#")
+    if len(hex_value) != 6:
+        raise ValueError(f"Invalid hex color: {hex_color}")
+    r = int(hex_value[0:2], 16) / 255.0
+    g = int(hex_value[2:4], 16) / 255.0
+    b = int(hex_value[4:6], 16) / 255.0
+    return float(r), float(g), float(b)
+
+def color_to_rgb01(color: Dict) -> Tuple[Tuple[float, float, float], str, Optional[str], Tuple[float, float, float]]:
+    """
+    If tone is vivid-like (None, "", "v"), use PCCS_VIVID_HEX by color id.
+    Otherwise, fall back to HSV approximation using hue + TONE_TO_HSV.
+    Returns (rgb01, source, vivid_hex_or_none, hsv_triplet).
+    """
+    tone = color.get("tone")
+    if tone in (None, "", "v"):
+        hex_color = PCCS_VIVID_HEX.get(int(color["id"]))
+        if hex_color:
+            hue, sat, val = color_to_hsv(color)
+            return hex_to_rgb01(hex_color), "hex", hex_color, (hue, sat, val)
+    hue, sat, val = color_to_hsv(color)
+    return hsv_to_rgb01(hue, sat, val), "hsv", None, (hue, sat, val)
 
 def make_swatch_image(width: int, height: int, rgb: Tuple[float, float, float]) -> torch.Tensor:
     swatch = np.zeros((1, height, width, 3), dtype=np.float32)
@@ -510,14 +562,17 @@ class PCCSColorSwatch:
         try:
             color = find_first_color_token(text)
             token = build_color_token(color, tone=color.get("tone"))
-            hue, sat, val = color_to_hsv(color)
-            rgb = hsv_to_rgb01(hue, sat, val)
+            rgb, source, hex_color, (hue, sat, val) = color_to_rgb01(color)
             image = make_swatch_image(width, height, rgb)
-            tone = color.get("tone") or ""
+            tone = color.get("tone")
+            tone_label = "vivid" if tone in (None, "", "v") else tone
             info = (
-                f"PCCS Swatch | token={token} | en={color['en']} | tone={tone} "
-                f"| hsv=({hue:.1f},{sat:.2f},{val:.2f})"
+                f"PCCS Swatch | token={token} | en={color['en']} | tone={tone_label} "
             )
+            if source == "hex":
+                info += f"| source=hex | hex={hex_color}"
+            else:
+                info += f"| source=hsv | hsv=({hue:.1f},{sat:.2f},{val:.2f})"
             return (image, info, int(color["id"]), float(hue), float(sat), float(val))
         except Exception as e:
             err = f"ERROR: {type(e).__name__}: {e}"
