@@ -21,6 +21,13 @@ def angle_deg_to_pccs_id(angle_deg: float) -> int:
     step = int(round(angle_deg / PCCS_HUE_STEP)) % 24
     return ((PCCS_ANGLE_ZERO_ID - 1 - step) % 24) + 1
 
+def pccs_id_to_hsv_hue_deg(color_id: int) -> float:
+    """
+    Convert PCCS hue id to HSV hue degree where 0° is red.
+    id=2 (R) is anchored to 0°, and each neighboring id is 15° apart.
+    """
+    return ((color_id - 2) % 24) * PCCS_HUE_STEP
+
 PCCS_24_BASE = [
     {"id": 1,  "code": "pR",  "jp": "紫みの赤",   "en": "purplish_red"},
     {"id": 2,  "code": "R",   "jp": "赤",         "en": "red"},
@@ -147,10 +154,18 @@ def parse_match_to_color(match: Match[str]) -> Dict:
         raise ValueError(f"Invalid PCCS color id: {color_id}")
 
     color = get_color_by_id(color_id)
+    matched_code = match.group("code")
+    matched_jp = match.group("jp")
+    if matched_code != color["code"] or matched_jp != color["jp"]:
+        raise ValueError(
+            "PCCS token mismatch for id="
+            f"{color_id}: expected {color['code']}({color['jp']}), "
+            f"got {matched_code}({matched_jp})"
+        )
     color["tone"] = match.group("tone")
     color["matched_text"] = match.group(0)
-    color["matched_code"] = match.group("code")
-    color["matched_jp"] = match.group("jp")
+    color["matched_code"] = matched_code
+    color["matched_jp"] = matched_jp
     color["start"] = match.start()
     color["end"] = match.end()
     return color
@@ -241,7 +256,7 @@ def same_hue_transform(force_tone: Optional[str] = None, preserve_tone: bool = F
 # =========================================================
 
 def color_to_hsv(color: Dict) -> Tuple[float, float, float]:
-    hue = float(color["h"])
+    hue = float(pccs_id_to_hsv_hue_deg(int(color["id"])))
     tone = color.get("tone")
     tone_hsv = TONE_TO_HSV.get(tone, TONE_TO_HSV[None])
     return hue, float(tone_hsv["s"]), float(tone_hsv["v"])
