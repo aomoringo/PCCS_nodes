@@ -5,37 +5,50 @@ import numpy as np
 import torch
 
 # =========================================================
-# PCCS 24 HUES
-# Simplified 24-step hue circle for ComfyUI processing
+# PCCS 24 HUES (official wheel orientation)
+# 24-step hue circle for ComfyUI processing
 # 1 step = 15 degrees
+# ID 14 is 0 degrees (right), counterclockwise is positive
 # =========================================================
 
-PCCS_24 = [
-    {"id": 1,  "code": "R",   "jp": "赤",         "en": "red",                "h":   0},
-    {"id": 2,  "code": "rO",  "jp": "赤橙",       "en": "reddish_orange",     "h":  15},
-    {"id": 3,  "code": "O",   "jp": "橙",         "en": "orange",             "h":  30},
-    {"id": 4,  "code": "yO",  "jp": "黄橙",       "en": "yellowish_orange",   "h":  45},
-    {"id": 5,  "code": "Y",   "jp": "黄",         "en": "yellow",             "h":  60},
-    {"id": 6,  "code": "YG",  "jp": "黄緑",       "en": "yellow_green",       "h":  75},
-    {"id": 7,  "code": "yG",  "jp": "黄みの緑",   "en": "yellowish_green",    "h":  90},
-    {"id": 8,  "code": "G",   "jp": "緑",         "en": "green",              "h": 105},
-    {"id": 9,  "code": "BG",  "jp": "青緑",       "en": "blue_green",         "h": 120},
-    {"id": 10, "code": "bG",  "jp": "青みの緑",   "en": "bluish_green",       "h": 135},
-    {"id": 11, "code": "gB",  "jp": "緑みの青",   "en": "greenish_blue",      "h": 150},
-    {"id": 12, "code": "B",   "jp": "青",         "en": "blue",               "h": 165},
-    {"id": 13, "code": "PB",  "jp": "青紫",       "en": "blue_purple",        "h": 180},
-    {"id": 14, "code": "bP",  "jp": "青みの紫",   "en": "bluish_purple",      "h": 195},
-    {"id": 15, "code": "P",   "jp": "紫",         "en": "purple",             "h": 210},
-    {"id": 16, "code": "RP",  "jp": "赤紫",       "en": "red_purple",         "h": 225},
-    {"id": 17, "code": "rP",  "jp": "赤みの紫",   "en": "reddish_purple",     "h": 240},
-    {"id": 18, "code": "pR",  "jp": "紫みの赤",   "en": "purplish_red",       "h": 255},
-    {"id": 19, "code": "R2",  "jp": "赤(2)",      "en": "red_2",              "h": 270},
-    {"id": 20, "code": "rO2", "jp": "赤橙(2)",    "en": "reddish_orange_2",   "h": 285},
-    {"id": 21, "code": "O2",  "jp": "橙(2)",      "en": "orange_2",           "h": 300},
-    {"id": 22, "code": "yO2", "jp": "黄橙(2)",    "en": "yellowish_orange_2", "h": 315},
-    {"id": 23, "code": "Y2",  "jp": "黄(2)",      "en": "yellow_2",           "h": 330},
-    {"id": 24, "code": "YG2", "jp": "黄緑(2)",    "en": "yellow_green_2",     "h": 345},
+PCCS_HUE_STEP = 15.0
+PCCS_ANGLE_ZERO_ID = 14
+
+def pccs_id_to_angle_deg(color_id: int) -> float:
+    return ((PCCS_ANGLE_ZERO_ID - color_id) % 24) * PCCS_HUE_STEP
+
+def angle_deg_to_pccs_id(angle_deg: float) -> int:
+    step = int(round(angle_deg / PCCS_HUE_STEP)) % 24
+    return ((PCCS_ANGLE_ZERO_ID - 1 - step) % 24) + 1
+
+PCCS_24_BASE = [
+    {"id": 1,  "code": "R",   "jp": "赤",         "en": "red"},
+    {"id": 2,  "code": "rO",  "jp": "赤橙",       "en": "reddish_orange"},
+    {"id": 3,  "code": "O",   "jp": "橙",         "en": "orange"},
+    {"id": 4,  "code": "yO",  "jp": "黄橙",       "en": "yellowish_orange"},
+    {"id": 5,  "code": "Y",   "jp": "黄",         "en": "yellow"},
+    {"id": 6,  "code": "YG",  "jp": "黄緑",       "en": "yellow_green"},
+    {"id": 7,  "code": "yG",  "jp": "黄みの緑",   "en": "yellowish_green"},
+    {"id": 8,  "code": "G",   "jp": "緑",         "en": "green"},
+    {"id": 9,  "code": "BG",  "jp": "青緑",       "en": "blue_green"},
+    {"id": 10, "code": "bG",  "jp": "青みの緑",   "en": "bluish_green"},
+    {"id": 11, "code": "gB",  "jp": "緑みの青",   "en": "greenish_blue"},
+    {"id": 12, "code": "B",   "jp": "青",         "en": "blue"},
+    {"id": 13, "code": "PB",  "jp": "青紫",       "en": "blue_purple"},
+    {"id": 14, "code": "bP",  "jp": "青みの紫",   "en": "bluish_purple"},
+    {"id": 15, "code": "P",   "jp": "紫",         "en": "purple"},
+    {"id": 16, "code": "RP",  "jp": "赤紫",       "en": "red_purple"},
+    {"id": 17, "code": "rP",  "jp": "赤みの紫",   "en": "reddish_purple"},
+    {"id": 18, "code": "pR",  "jp": "紫みの赤",   "en": "purplish_red"},
+    {"id": 19, "code": "R2",  "jp": "赤(2)",      "en": "red_2"},
+    {"id": 20, "code": "rO2", "jp": "赤橙(2)",    "en": "reddish_orange_2"},
+    {"id": 21, "code": "O2",  "jp": "橙(2)",      "en": "orange_2"},
+    {"id": 22, "code": "yO2", "jp": "黄橙(2)",    "en": "yellowish_orange_2"},
+    {"id": 23, "code": "Y2",  "jp": "黄(2)",      "en": "yellow_2"},
+    {"id": 24, "code": "YG2", "jp": "黄緑(2)",    "en": "yellow_green_2"},
 ]
+
+PCCS_24 = [{**c, "h": pccs_id_to_angle_deg(c["id"])} for c in PCCS_24_BASE]
 
 PCCS_BY_ID = {c["id"]: c for c in PCCS_24}
 
@@ -120,7 +133,8 @@ PCCS_VIVID_HEX = {
 # =========================================================
 
 def rotate_hue_id(hue_id: int, step: int) -> int:
-    return ((hue_id - 1 + step) % 24) + 1
+    # +1 step = +15 degrees counterclockwise on official PCCS wheel
+    return ((hue_id - 1 - step) % 24) + 1
 
 def get_color_by_id(color_id: int) -> Dict:
     if color_id not in PCCS_BY_ID:
