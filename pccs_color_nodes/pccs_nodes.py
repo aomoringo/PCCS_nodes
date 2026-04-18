@@ -84,17 +84,6 @@ COLOR_TOKEN_PATTERN = re.compile(
 # hsv: h(0-360), s(0-1), v(0-1)
 # =========================================================
 
-TONE_TO_PROMPT_PREFIX = {
-    None: "",
-    "": "",
-    "p": "pale",
-    "dk": "dark",
-    "sf": "soft",
-    "g": "grayish",
-    "ltg": "light_grayish",
-    "d": "dull",
-}
-
 # Preview-oriented HSV presets
 TONE_TO_HSV = {
     None: {"s": 0.85, "v": 0.90},
@@ -105,6 +94,50 @@ TONE_TO_HSV = {
     "g":  {"s": 0.25, "v": 0.70},
     "ltg":{"s": 0.18, "v": 0.88},
     "d":  {"s": 0.38, "v": 0.55},
+}
+
+SUPPORTED_TONES_FOR_MAPPING = {"v", "b", "s", "dp", "lt", "sf", "d", "dk", "p", "ltg", "g", "dkg"}
+
+HUE_TAGS_24 = {
+    1:  ["red", "crimson"],
+    2:  ["red"],
+    3:  ["red", "orange"],
+    4:  ["orange"],
+    5:  ["orange"],
+    6:  ["orange", "yellow"],
+    7:  ["yellow"],
+    8:  ["yellow"],
+    9:  ["yellow_green", "green"],
+    10: ["green"],
+    11: ["green"],
+    12: ["green"],
+    13: ["green", "teal"],
+    14: ["teal", "cyan"],
+    15: ["cyan", "blue"],
+    16: ["blue"],
+    17: ["blue"],
+    18: ["blue", "purple"],
+    19: ["purple"],
+    20: ["purple"],
+    21: ["purple", "pink"],
+    22: ["magenta", "pink"],
+    23: ["pink"],
+    24: ["pink", "red"],
+}
+
+TONE_TAGS = {
+    "v":   ["vivid", "saturated"],
+    "b":   ["bright"],
+    "s":   ["strong_color", "saturated"],
+    "dp":  ["deep"],
+    "lt":  ["light"],
+    "sf":  ["soft_color"],
+    "d":   ["dull", "muted_color"],
+    "dk":  ["dark"],
+    "p":   ["pale", "pastel"],
+    "ltg": ["light", "grey", "muted_color"],
+    "g":   ["grey", "muted_color"],
+    "dkg": ["dark", "grey", "muted_color"],
 }
 
 # PCCS fixed hex table by tone (24 colors each, id=1..24)
@@ -321,6 +354,59 @@ def normalize_tone_for_fixed_hex(tone: Optional[str]) -> str:
     if tone in {"lt+", "p+"}:
         raise ValueError(f"Unsupported PCCS tone: {tone}")
     return tone
+
+def normalize_tone_for_mapping(tone: Optional[str]) -> str:
+    if tone in (None, "", "V"):
+        return "v"
+    tone_normalized = str(tone).strip().lower()
+    if tone_normalized in {"lt+", "p+"}:
+        raise ValueError(f"Unsupported PCCS tone for Danbooru mapping: {tone}")
+    if tone_normalized not in SUPPORTED_TONES_FOR_MAPPING:
+        raise ValueError(f"Unsupported PCCS tone for Danbooru mapping: {tone}")
+    return tone_normalized
+
+def get_hue_tags(color_id: int) -> List[str]:
+    tags = HUE_TAGS_24.get(int(color_id))
+    if not tags:
+        raise ValueError(f"Unsupported PCCS color id for Danbooru mapping: {color_id}")
+    return list(tags)
+
+def get_tone_tags(tone: Optional[str]) -> List[str]:
+    normalized_tone = normalize_tone_for_mapping(tone)
+    tags = TONE_TAGS.get(normalized_tone)
+    if not tags:
+        raise ValueError(f"Unsupported PCCS tone for Danbooru mapping: {tone}")
+    return list(tags)
+
+def build_compound_color_tag(main_hue_tag: str, tone: Optional[str]) -> str:
+    normalized_tone = normalize_tone_for_mapping(tone)
+    if normalized_tone == "dk":
+        return f"dark_{main_hue_tag}"
+    if normalized_tone == "lt":
+        return f"light_{main_hue_tag}"
+    if normalized_tone == "p":
+        return f"pale_{main_hue_tag}"
+    return ""
+
+def color_to_danbooru_tags(color: Dict) -> str:
+    hue_tags = get_hue_tags(int(color["id"]))
+    tone_tags = get_tone_tags(color.get("tone"))
+    main_hue_tag = hue_tags[0]
+    compound_tag = build_compound_color_tag(main_hue_tag, color.get("tone"))
+
+    tags: List[str] = []
+    if compound_tag:
+        tags.append(compound_tag)
+    tags.extend(hue_tags)
+    tags.extend(tone_tags)
+
+    unique_tags: List[str] = []
+    seen = set()
+    for tag in tags:
+        if tag not in seen:
+            seen.add(tag)
+            unique_tags.append(tag)
+    return ", ".join(unique_tags)
 
 def color_to_hex(color: Dict) -> str:
     tone = normalize_tone_for_fixed_hex(color.get("tone"))
@@ -585,8 +671,8 @@ class PCCSComplexHarmonyToken:
         )
 
 # =========================================================
-# NODE 9: TOKEN TO PROMPT
-# {p:1:R(赤)} -> pale_red
+# NODE 9: TOKEN TO DANBOORU TAGS
+# {p:1:R(赤)} -> pale_red, red, crimson, pale, pastel
 # =========================================================
 
 class PCCSTokenToPrompt:
@@ -603,20 +689,13 @@ class PCCSTokenToPrompt:
         }
 
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("prompt_text",)
+    RETURN_NAMES = ("danbooru_tags_text",)
     FUNCTION = "convert"
     CATEGORY = "PCCS/Color"
 
     @safe_run(fallback_count=1)
     def convert(self, text: str, replace_all: bool):
-        def _transform(color: Dict) -> str:
-            tone = color.get("tone")
-            prefix = TONE_TO_PROMPT_PREFIX.get(tone, tone or "")
-            if prefix:
-                return f"{prefix}_{color['en']}"
-            return color["en"]
-
-        return (replace_color_tokens(text, _transform, replace_all=replace_all),)
+        return (replace_color_tokens(text, color_to_danbooru_tags, replace_all=replace_all),)
 
 # =========================================================
 # NODE 10: COLOR SWATCH PREVIEW
@@ -684,6 +763,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PCCSContrastHarmonyToken": "PCCS Harmony Token: Contrast (±120°)",
     "PCCSNaturalHarmonyToken": "PCCS Harmony Token: Natural",
     "PCCSComplexHarmonyToken": "PCCS Harmony Token: Complex",
-    "PCCSTokenToPrompt": "PCCS Token To Prompt",
+    "PCCSTokenToPrompt": "PCCS Token To Danbooru Tags",
     "PCCSColorSwatch": "PCCS Color Swatch",
 }
